@@ -474,6 +474,7 @@ export const telegram = (options: TelegramOptions) => {
 						photo_url: photo_url,
 					};
 
+					let isNewUser = false;
 					let user: User | null = null;
 
 					// look for existing account by telegram id
@@ -512,8 +513,6 @@ export const telegram = (options: TelegramOptions) => {
 					const userEmail =
 						userMap?.email ?? `telegram-${profile.id}@${domain}`;
 
-					let isNewUser = false;
-
 					// create new user if none exists
 					if (!user) {
 						try {
@@ -529,6 +528,7 @@ export const telegram = (options: TelegramOptions) => {
 								...userMap,
 								email: userEmail,
 							});
+							isNewUser = true;
 						} catch (e) {
 							if (e instanceof APIError) {
 								throw e;
