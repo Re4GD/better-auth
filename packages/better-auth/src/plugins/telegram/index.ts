@@ -2,8 +2,6 @@ import z from "zod/v4";
 import type { TelegramOptions, TelegramProfile } from "./types";
 import type { Account, User } from "../../types";
 import { setSessionCookie } from "../../cookies";
-import { createHash } from "@better-auth/utils/hash";
-import { createHMAC } from "@better-auth/utils/hmac";
 import {
 	createAuthEndpoint,
 	freshSessionMiddleware,
@@ -13,7 +11,8 @@ import {
 import type { BetterAuthPlugin } from "@better-auth/core";
 import { TELEGRAM_ERROR_CODES } from "./error-codes";
 import { APIError, BASE_ERROR_CODES } from "@better-auth/core/error";
-import { buildTelegramHash, getOriginHostname } from "./utils";
+import { getOriginHostname, verifyHash, verifyMaxAge } from "./utils";
+import { parseUserOutput } from "../../db";
 
 export type { TelegramOptions };
 
@@ -54,22 +53,11 @@ export const telegram = (options: TelegramOptions) => {
 						rememberMe,
 					} = ctx.body;
 
-					// create data-check-string by sorting all fields except hash
-					const dataFields = {
-						id: id,
-						first_name: first_name,
-						last_name: last_name,
-						username: username,
-						photo_url: photo_url,
-						auth_date: auth_date,
-					};
-
-					const authDate = parseInt(auth_date.toString());
-					const currentTime = Math.floor(Date.now() / 1000);
-					const maxAge = 60 * 5; // 5 minutes in seconds
-
 					// check if data is expired
-					if (currentTime - authDate > maxAge) {
+					const authDateValid = verifyMaxAge({
+						authDate: auth_date,
+					});
+					if (!authDateValid) {
 						ctx.context.logger.error("Expired auth date", {
 							telegramId: id,
 						});
@@ -79,21 +67,20 @@ export const telegram = (options: TelegramOptions) => {
 						);
 					}
 
-					// build data string
-					const dataCheckString = buildTelegramHash(dataFields);
-
-					// create secret key by hashing the bot token with sha256
-					const secretKey = await createHash("SHA-256").digest(
-						options.botToken,
-					);
-
-					// create hmac-sha256 signature
-					const hmac = createHMAC("SHA-256", "hex");
-					const key = await hmac.importKey(secretKey, "sign");
-					const calculatedHash = await hmac.sign(key, dataCheckString);
-
-					// compare with received hash
-					if (calculatedHash !== hash) {
+					// check if hash is valid
+					const hashValid = await verifyHash({
+						botToken: options.botToken,
+						dataFields: {
+							id: id,
+							first_name: first_name,
+							last_name: last_name,
+							username: username,
+							photo_url: photo_url,
+							auth_date: auth_date,
+						},
+						hash: hash,
+					});
+					if (!hashValid) {
 						ctx.context.logger.error("Invalid hash", {
 							telegramId: id,
 						});
@@ -247,22 +234,11 @@ export const telegram = (options: TelegramOptions) => {
 						hash,
 					} = ctx.body;
 
-					// create data-check-string by sorting all fields except hash
-					const dataFields = {
-						id: id,
-						first_name: first_name,
-						last_name: last_name,
-						username: username,
-						photo_url: photo_url,
-						auth_date: auth_date,
-					};
-
-					const authDate = parseInt(auth_date.toString());
-					const currentTime = Math.floor(Date.now() / 1000);
-					const maxAge = 60 * 5; // 5 minutes in seconds
-
 					// check if data is expired
-					if (currentTime - authDate > maxAge) {
+					const authDateValid = verifyMaxAge({
+						authDate: auth_date,
+					});
+					if (!authDateValid) {
 						ctx.context.logger.error("Expired auth date", {
 							telegramId: id,
 						});
@@ -272,21 +248,20 @@ export const telegram = (options: TelegramOptions) => {
 						);
 					}
 
-					// build data string
-					const dataCheckString = buildTelegramHash(dataFields);
-
-					// create secret key by hashing the bot token with sha256
-					const secretKey = await createHash("SHA-256").digest(
-						options.botToken,
-					);
-
-					// create hmac-sha256 signature
-					const hmac = createHMAC("SHA-256", "hex");
-					const key = await hmac.importKey(secretKey, "sign");
-					const calculatedHash = await hmac.sign(key, dataCheckString);
-
-					// compare with received hash
-					if (calculatedHash !== hash) {
+					// check if hash is valid
+					const hashValid = await verifyHash({
+						botToken: options.botToken,
+						dataFields: {
+							id: id,
+							first_name: first_name,
+							last_name: last_name,
+							username: username,
+							photo_url: photo_url,
+							auth_date: auth_date,
+						},
+						hash: hash,
+					});
+					if (!hashValid) {
 						ctx.context.logger.error("Invalid hash", {
 							telegramId: id,
 						});
@@ -384,14 +359,42 @@ export const telegram = (options: TelegramOptions) => {
 						last_name: z.string().optional(),
 						username: z.string().optional(),
 						photo_url: z.string().optional(),
-						auth_date: z.string(),
+						auth_date: z.number(),
 						hash: z.string(),
-						callbackURL: z.string().optional(),
+						callbackURL: z
+							.string()
+							.meta({
+								description: "URL to redirect after magic link verification",
+							})
+							.optional(),
+						newUserCallbackURL: z
+							.string()
+							.meta({
+								description:
+									"URL to redirect after new user signup. Only used if the user is registering for the first time.",
+							})
+							.optional(),
+						errorCallbackURL: z
+							.string()
+							.meta({
+								description: "URL to redirect after error.",
+							})
+							.optional(),
 					}),
 					use: [
 						originCheck((ctx) => {
 							return ctx.query.callbackURL
 								? decodeURIComponent(ctx.query.callbackURL)
+								: "/";
+						}),
+						originCheck((ctx) => {
+							return ctx.query.newUserCallbackURL
+								? decodeURIComponent(ctx.query.newUserCallbackURL)
+								: "/";
+						}),
+						originCheck((ctx) => {
+							return ctx.query.errorCallbackURL
+								? decodeURIComponent(ctx.query.errorCallbackURL)
 								: "/";
 						}),
 					],
@@ -407,53 +410,60 @@ export const telegram = (options: TelegramOptions) => {
 						hash,
 					} = ctx.query;
 
-					// create data-check-string by sorting all fields except hash
-					const dataFields = {
-						id: id,
-						first_name: first_name,
-						last_name: last_name,
-						username: username,
-						photo_url: photo_url,
-						auth_date: auth_date,
-					};
+					const callbackURL = new URL(
+						ctx.query.callbackURL
+							? decodeURIComponent(ctx.query.callbackURL)
+							: "/",
+						ctx.context.baseURL,
+					).toString();
+					const errorCallbackURL = new URL(
+						ctx.query.errorCallbackURL
+							? decodeURIComponent(ctx.query.errorCallbackURL)
+							: callbackURL,
+						ctx.context.baseURL,
+					);
 
-					const authDate = parseInt(auth_date.toString());
-					const currentTime = Math.floor(Date.now() / 1000);
-					const maxAge = 60 * 5; // 5 minutes in seconds
+					function redirectWithError(error: string): never {
+						errorCallbackURL.searchParams.set("error", error);
+						throw ctx.redirect(errorCallbackURL.toString());
+					}
+
+					const newUserCallbackURL = new URL(
+						ctx.query.newUserCallbackURL
+							? decodeURIComponent(ctx.query.newUserCallbackURL)
+							: callbackURL,
+						ctx.context.baseURL,
+					).toString();
 
 					// check if data is expired
-					if (currentTime - authDate > maxAge) {
+					const authDateValid = verifyMaxAge({
+						authDate: auth_date,
+					});
+					if (!authDateValid) {
 						ctx.context.logger.error("Expired auth date", {
 							telegramId: id,
 						});
-						throw APIError.from(
-							"UNAUTHORIZED",
-							TELEGRAM_ERROR_CODES.EXPIRED_AUTH_DATE,
-						);
+						redirectWithError("expired_auth_date");
 					}
 
-					// build data string
-					const dataCheckString = buildTelegramHash(dataFields);
-
-					// create secret key by hashing the bot token with sha256
-					const secretKey = await createHash("SHA-256").digest(
-						options.botToken,
-					);
-
-					// create hmac-sha256 signature
-					const hmac = createHMAC("SHA-256", "hex");
-					const key = await hmac.importKey(secretKey, "sign");
-					const calculatedHash = await hmac.sign(key, dataCheckString);
-
-					// compare with received hash
-					if (calculatedHash !== hash) {
+					// check if hash is valid
+					const hashValid = await verifyHash({
+						botToken: options.botToken,
+						dataFields: {
+							id: id,
+							first_name: first_name,
+							last_name: last_name,
+							username: username,
+							photo_url: photo_url,
+							auth_date: auth_date,
+						},
+						hash: hash,
+					});
+					if (!hashValid) {
 						ctx.context.logger.error("Invalid hash", {
 							telegramId: id,
 						});
-						throw APIError.from(
-							"UNAUTHORIZED",
-							TELEGRAM_ERROR_CODES.INVALID_DATA_OR_HASH,
-						);
+						redirectWithError("invalid_data_or_hash");
 					}
 
 					let profile: TelegramProfile = {
@@ -502,6 +512,8 @@ export const telegram = (options: TelegramOptions) => {
 					const userEmail =
 						userMap?.email ?? `telegram-${profile.id}@${domain}`;
 
+					let isNewUser = false;
+
 					// create new user if none exists
 					if (!user) {
 						try {
@@ -521,10 +533,7 @@ export const telegram = (options: TelegramOptions) => {
 							if (e instanceof APIError) {
 								throw e;
 							}
-							throw APIError.from(
-								"INTERNAL_SERVER_ERROR",
-								BASE_ERROR_CODES.FAILED_TO_CREATE_USER,
-							);
+							redirectWithError("failed_to_create_user");
 						}
 
 						await ctx.context.internalAdapter.linkAccount({
@@ -539,37 +548,22 @@ export const telegram = (options: TelegramOptions) => {
 					);
 					if (!session) {
 						ctx.context.logger.error("Failed to create session");
-						throw APIError.from(
-							"UNAUTHORIZED",
-							BASE_ERROR_CODES.FAILED_TO_CREATE_SESSION,
-						);
+						redirectWithError("failed_to_create_session");
 					}
 
 					await setSessionCookie(ctx, {
 						session,
 						user: user,
 					});
-
-					// return ctx.json({
-					// 	token: session.token,
-					// 	user: {
-					// 		id: user.id,
-					// 		name: user.name,
-					// 		email: user.email,
-					// 		emailVerified: user.emailVerified,
-					// 		image: user.image,
-					// 		createdAt: user.createdAt,
-					// 		updatedAt: user.updatedAt,
-					// 	},
-					// });
-
-					const callbackURL = new URL(
-						ctx.query.callbackURL
-							? decodeURIComponent(ctx.query.callbackURL)
-							: "/",
-						ctx.context.baseURL,
-					).toString();
-
+					if (!ctx.query.callbackURL) {
+						return ctx.json({
+							token: session.token,
+							user: parseUserOutput(ctx.context.options, user),
+						});
+					}
+					if (isNewUser) {
+						throw ctx.redirect(newUserCallbackURL);
+					}
 					throw ctx.redirect(callbackURL);
 				},
 			),
