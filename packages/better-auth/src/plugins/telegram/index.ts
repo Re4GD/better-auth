@@ -27,7 +27,7 @@ export const telegram = (options: TelegramOptions) => {
 		id: "telegram",
 		endpoints: {
 			telegramSignIn: createAuthEndpoint(
-				"/telegram/sign-in",
+				"/sign-in/telegram",
 				{
 					method: "POST",
 					body: z.object({
