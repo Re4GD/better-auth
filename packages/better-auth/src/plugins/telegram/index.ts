@@ -359,7 +359,7 @@ export const telegram = (options: TelegramOptions) => {
 						last_name: z.string().optional(),
 						username: z.string().optional(),
 						photo_url: z.string().optional(),
-						auth_date: z.number(),
+						auth_date: z.string(),
 						hash: z.string(),
 						callbackURL: z
 							.string()
