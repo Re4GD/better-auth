@@ -375,7 +375,7 @@ export const telegram = (options: TelegramOptions) => {
 				},
 			),
 			telegramCallback: createAuthEndpoint(
-				"/telegram/callback",
+				"/callback/telegram",
 				{
 					method: "GET",
 					query: z.object({
