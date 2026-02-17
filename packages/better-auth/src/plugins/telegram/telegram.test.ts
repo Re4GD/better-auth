@@ -19,7 +19,7 @@ describe("telegram", async (it) => {
 				},
 			},
 		);
-		const { error } = await client.telegram.signIn({
+		const { error } = await client.signIn.telegram({
 			id: 1111111111,
 			auth_date: 1754126181,
 			hash: "A1b2C3d4E5f6G7h8J",
