@@ -1,77 +1,27 @@
 import z from "zod/v4";
-import { createAuthEndpoint, type BetterAuthPlugin } from "..";
-import type { TelegramProfile } from "./types";
-import { APIError } from "better-call";
+import type { TelegramOptions, TelegramProfile } from "./types";
 import type { Account, User } from "../../types";
 import { setSessionCookie } from "../../cookies";
 import { createHash } from "@better-auth/utils/hash";
 import { createHMAC } from "@better-auth/utils/hmac";
-import { originCheck, sessionMiddleware } from "../../api";
+import { createAuthEndpoint, originCheck, sessionMiddleware } from "../../api";
+import type { BetterAuthPlugin } from "@better-auth/core";
+import { TELEGRAM_ERROR_CODES } from "./error-codes";
+import { APIError, BASE_ERROR_CODES } from "@better-auth/core/error";
+import { buildTelegramHash, getOriginHostname } from "./utils";
+
+export type { TelegramOptions };
 
 // TODO docs: react examples, redirect/callback flows
 // TODO test: test link with existing account
 // TODO feat: add callback-link endpoint
 // TODO callback api errors should redirect to url like magic link
 
-const buildTelegramHash = (dataFields: object) => {
-	// build data string
-	const dataCheckString = Object.keys(dataFields)
-		.filter((key) => dataFields[key as keyof typeof dataFields] !== undefined)
-		.sort()
-		.map((key) => `${key}=${dataFields[key as keyof typeof dataFields]}`)
-		.join("\n");
-
-	return dataCheckString;
-};
-
-export type TelegramOptions = {
-	/**
-	 * Bot token created from BotFather
-	 */
-	botToken: string;
-	/**
-	 * Custom function to map the user profile to a User object.
-	 */
-	mapProfileToUser?: (profile: TelegramProfile) =>
-		| {
-				id?: string;
-				name?: string;
-				email?: string | null;
-				image?: string;
-				emailVerified?: boolean;
-				[key: string]: any;
-		  }
-		| Promise<{
-				id?: string;
-				name?: string;
-				email?: string | null;
-				image?: string;
-				emailVerified?: boolean;
-				[key: string]: any;
-		  }>;
-};
-
-export const ERROR_CODES = {
-	EXPIRED_AUTH_DATE: "Expired auth date",
-	INVALID_DATA_OR_HASH: "Failed to validate data or hash",
-	FAILED_TO_CREATE_USER: "Failed to create user",
-	FAILED_TO_CREATE_SESSION: "Failed to create session",
-};
-
-function getOriginHostname(url: string) {
-	try {
-		const parsedUrl = new URL(url);
-		return parsedUrl.hostname;
-	} catch (error) {
-		return null;
-	}
-}
-
 export const telegram = (options: TelegramOptions) => {
 	return {
 		id: "telegram",
 		endpoints: {
-			signIn: createAuthEndpoint(
+			telegramSignIn: createAuthEndpoint(
 				"/telegram/sign-in",
 				{
 					method: "POST",
@@ -118,9 +68,10 @@ export const telegram = (options: TelegramOptions) => {
 						ctx.context.logger.error("Expired auth date", {
 							telegramId: id,
 						});
-						throw new APIError("UNAUTHORIZED", {
-							message: ERROR_CODES.EXPIRED_AUTH_DATE,
-						});
+						throw APIError.from(
+							"UNAUTHORIZED",
+							TELEGRAM_ERROR_CODES.EXPIRED_AUTH_DATE,
+						);
 					}
 
 					// build data string
@@ -141,9 +92,10 @@ export const telegram = (options: TelegramOptions) => {
 						ctx.context.logger.error("Invalid hash", {
 							telegramId: id,
 						});
-						throw new APIError("UNAUTHORIZED", {
-							message: ERROR_CODES.INVALID_DATA_OR_HASH,
-						});
+						throw APIError.from(
+							"UNAUTHORIZED",
+							TELEGRAM_ERROR_CODES.INVALID_DATA_OR_HASH,
+						);
 					}
 
 					let profile: TelegramProfile = {
@@ -195,51 +147,45 @@ export const telegram = (options: TelegramOptions) => {
 					// create new user if none exists
 					if (!user) {
 						try {
-							user = await ctx.context.internalAdapter.createUser(
-								{
-									firstName: profile.first_name,
-									lastName: profile.last_name,
-									name:
-										[profile.first_name, profile.last_name]
-											.filter(Boolean)
-											.join(" ") ?? `telegram-${profile.id}`,
-									emailVerified: false,
-									image: profile.photo_url ?? null,
-									...userMap,
-									email: userEmail,
-								},
-								ctx,
-							);
+							user = await ctx.context.internalAdapter.createUser({
+								firstName: profile.first_name,
+								lastName: profile.last_name,
+								name:
+									[profile.first_name, profile.last_name]
+										.filter(Boolean)
+										.join(" ") ?? `telegram-${profile.id}`,
+								emailVerified: false,
+								image: profile.photo_url ?? null,
+								...userMap,
+								email: userEmail,
+							});
 						} catch (e) {
 							if (e instanceof APIError) {
 								throw e;
 							}
-							throw new APIError("UNPROCESSABLE_ENTITY", {
-								message: ERROR_CODES.FAILED_TO_CREATE_USER,
-								details: e,
-							});
+							throw APIError.from(
+								"INTERNAL_SERVER_ERROR",
+								BASE_ERROR_CODES.FAILED_TO_CREATE_USER,
+							);
 						}
 
-						await ctx.context.internalAdapter.linkAccount(
-							{
-								userId: user.id,
-								providerId: "telegram",
-								accountId: profile.id.toString(),
-							},
-							ctx,
-						);
+						await ctx.context.internalAdapter.linkAccount({
+							userId: user.id,
+							providerId: "telegram",
+							accountId: profile.id.toString(),
+						});
 					}
 
 					const session = await ctx.context.internalAdapter.createSession(
 						user.id,
-						ctx,
 						rememberMe === false,
 					);
 					if (!session) {
 						ctx.context.logger.error("Failed to create session");
-						throw new APIError("UNAUTHORIZED", {
-							message: ERROR_CODES.FAILED_TO_CREATE_SESSION,
-						});
+						throw APIError.from(
+							"UNAUTHORIZED",
+							BASE_ERROR_CODES.FAILED_TO_CREATE_SESSION,
+						);
 					}
 
 					await setSessionCookie(
@@ -267,7 +213,7 @@ export const telegram = (options: TelegramOptions) => {
 					});
 				},
 			),
-			link: createAuthEndpoint(
+			telegramLink: createAuthEndpoint(
 				"/telegram/link",
 				{
 					method: "POST",
@@ -279,7 +225,6 @@ export const telegram = (options: TelegramOptions) => {
 						photo_url: z.string().optional(),
 						auth_date: z.number(),
 						hash: z.string(),
-						rememberMe: z.boolean().optional(),
 						callbackURL: z.string().optional(),
 					}),
 					use: [sessionMiddleware],
@@ -295,7 +240,6 @@ export const telegram = (options: TelegramOptions) => {
 						photo_url,
 						auth_date,
 						hash,
-						rememberMe,
 					} = ctx.body;
 
 					// create data-check-string by sorting all fields except hash
@@ -317,9 +261,10 @@ export const telegram = (options: TelegramOptions) => {
 						ctx.context.logger.error("Expired auth date", {
 							telegramId: id,
 						});
-						throw new APIError("UNAUTHORIZED", {
-							message: ERROR_CODES.EXPIRED_AUTH_DATE,
-						});
+						throw APIError.from(
+							"UNAUTHORIZED",
+							TELEGRAM_ERROR_CODES.EXPIRED_AUTH_DATE,
+						);
 					}
 
 					// build data string
@@ -340,9 +285,10 @@ export const telegram = (options: TelegramOptions) => {
 						ctx.context.logger.error("Invalid hash", {
 							telegramId: id,
 						});
-						throw new APIError("UNAUTHORIZED", {
-							message: ERROR_CODES.INVALID_DATA_OR_HASH,
-						});
+						throw APIError.from(
+							"UNAUTHORIZED",
+							TELEGRAM_ERROR_CODES.INVALID_DATA_OR_HASH,
+						);
 					}
 
 					let profile: TelegramProfile = {
@@ -405,14 +351,11 @@ export const telegram = (options: TelegramOptions) => {
 					}
 
 					// link account
-					await ctx.context.internalAdapter.linkAccount(
-						{
-							userId: session.user.id,
-							providerId: "telegram",
-							accountId: profile.id.toString(),
-						},
-						ctx,
-					);
+					await ctx.context.internalAdapter.linkAccount({
+						userId: session.user.id,
+						providerId: "telegram",
+						accountId: profile.id.toString(),
+					});
 
 					return ctx.json({
 						redirect: !!ctx.body.callbackURL,
@@ -421,7 +364,7 @@ export const telegram = (options: TelegramOptions) => {
 					});
 				},
 			),
-			callback: createAuthEndpoint(
+			telegramCallback: createAuthEndpoint(
 				"/telegram/callback",
 				{
 					method: "GET",
@@ -473,9 +416,10 @@ export const telegram = (options: TelegramOptions) => {
 						ctx.context.logger.error("Expired auth date", {
 							telegramId: id,
 						});
-						throw new APIError("UNAUTHORIZED", {
-							message: ERROR_CODES.EXPIRED_AUTH_DATE,
-						});
+						throw APIError.from(
+							"UNAUTHORIZED",
+							TELEGRAM_ERROR_CODES.EXPIRED_AUTH_DATE,
+						);
 					}
 
 					// build data string
@@ -496,9 +440,10 @@ export const telegram = (options: TelegramOptions) => {
 						ctx.context.logger.error("Invalid hash", {
 							telegramId: id,
 						});
-						throw new APIError("UNAUTHORIZED", {
-							message: ERROR_CODES.INVALID_DATA_OR_HASH,
-						});
+						throw APIError.from(
+							"UNAUTHORIZED",
+							TELEGRAM_ERROR_CODES.INVALID_DATA_OR_HASH,
+						);
 					}
 
 					let profile: TelegramProfile = {
@@ -550,50 +495,44 @@ export const telegram = (options: TelegramOptions) => {
 					// create new user if none exists
 					if (!user) {
 						try {
-							user = await ctx.context.internalAdapter.createUser(
-								{
-									firstName: profile.first_name,
-									lastName: profile.last_name,
-									name:
-										[profile.first_name, profile.last_name]
-											.filter(Boolean)
-											.join(" ") ?? `telegram-${profile.id}`,
-									emailVerified: false,
-									image: profile.photo_url ?? null,
-									...userMap,
-									email: userEmail,
-								},
-								ctx,
-							);
+							user = await ctx.context.internalAdapter.createUser({
+								firstName: profile.first_name,
+								lastName: profile.last_name,
+								name:
+									[profile.first_name, profile.last_name]
+										.filter(Boolean)
+										.join(" ") ?? `telegram-${profile.id}`,
+								emailVerified: false,
+								image: profile.photo_url ?? null,
+								...userMap,
+								email: userEmail,
+							});
 						} catch (e) {
 							if (e instanceof APIError) {
 								throw e;
 							}
-							throw new APIError("UNPROCESSABLE_ENTITY", {
-								message: ERROR_CODES.FAILED_TO_CREATE_USER,
-								details: e,
-							});
+							throw APIError.from(
+								"INTERNAL_SERVER_ERROR",
+								BASE_ERROR_CODES.FAILED_TO_CREATE_USER,
+							);
 						}
 
-						await ctx.context.internalAdapter.linkAccount(
-							{
-								userId: user.id,
-								providerId: "telegram",
-								accountId: profile.id.toString(),
-							},
-							ctx,
-						);
+						await ctx.context.internalAdapter.linkAccount({
+							userId: user.id,
+							providerId: "telegram",
+							accountId: profile.id.toString(),
+						});
 					}
 
 					const session = await ctx.context.internalAdapter.createSession(
 						user.id,
-						ctx,
 					);
 					if (!session) {
 						ctx.context.logger.error("Failed to create session");
-						throw new APIError("UNAUTHORIZED", {
-							message: ERROR_CODES.FAILED_TO_CREATE_SESSION,
-						});
+						throw APIError.from(
+							"UNAUTHORIZED",
+							BASE_ERROR_CODES.FAILED_TO_CREATE_SESSION,
+						);
 					}
 
 					await setSessionCookie(ctx, {
@@ -625,6 +564,6 @@ export const telegram = (options: TelegramOptions) => {
 				},
 			),
 		},
-		$ERROR_CODES: ERROR_CODES,
+		$ERROR_CODES: TELEGRAM_ERROR_CODES,
 	} satisfies BetterAuthPlugin;
 };
