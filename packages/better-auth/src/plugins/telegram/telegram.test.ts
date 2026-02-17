@@ -31,4 +31,33 @@ describe("telegram", async (it) => {
 		expect(error?.code).toBe("EXPIRED_AUTH_DATE");
 		expect(error?.message).toMatch(/expired/i);
 	});
+
+	it("should reject verification if hash is incorrect", async () => {
+		const { client } = await getTestInstance(
+			{
+				plugins: [
+					telegram({
+						botToken: "A1b2C3d4E5f6G7h8J",
+					}),
+				],
+			},
+			{
+				clientOptions: {
+					plugins: [telegramClient()],
+				},
+			},
+		);
+		const currentTime = Math.floor(Date.now() / 1000);
+		const { error } = await client.signIn.telegram({
+			id: 1111111111,
+			first_name: "hi",
+			auth_date: currentTime,
+			hash: "A1b2C3d4E5f6G7h8J",
+		});
+
+		expect(error).toBeDefined();
+		expect(error?.status).toBe(401);
+		expect(error?.code).toBe("INVALID_DATA_OR_HASH");
+		expect(error?.message).toMatch(/expired/i);
+	});
 });
