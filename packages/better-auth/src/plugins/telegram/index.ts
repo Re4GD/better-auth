@@ -4,7 +4,12 @@ import type { Account, User } from "../../types";
 import { setSessionCookie } from "../../cookies";
 import { createHash } from "@better-auth/utils/hash";
 import { createHMAC } from "@better-auth/utils/hmac";
-import { createAuthEndpoint, originCheck, sessionMiddleware } from "../../api";
+import {
+	createAuthEndpoint,
+	freshSessionMiddleware,
+	originCheck,
+	sessionMiddleware,
+} from "../../api";
 import type { BetterAuthPlugin } from "@better-auth/core";
 import { TELEGRAM_ERROR_CODES } from "./error-codes";
 import { APIError, BASE_ERROR_CODES } from "@better-auth/core/error";
@@ -299,8 +304,6 @@ export const telegram = (options: TelegramOptions) => {
 						photo_url: photo_url,
 					};
 
-					let user: User | null = null;
-
 					// look for existing accounts
 					const existingAccounts =
 						await ctx.context.internalAdapter.findAccounts(session.user.id);
@@ -319,37 +322,6 @@ export const telegram = (options: TelegramOptions) => {
 						});
 					}
 
-					// look for existing account by telegram id
-					const existingAccount: Account | null =
-						await ctx.context.adapter.findOne({
-							model: "account",
-							where: [
-								{
-									field: "providerId",
-									operator: "eq",
-									value: "telegram",
-								},
-								{
-									field: "accountId",
-									operator: "eq",
-									value: profile.id.toString(),
-								},
-							],
-						});
-
-					if (existingAccount) {
-						user = await ctx.context.adapter.findOne<User>({
-							model: "user",
-							where: [
-								{
-									field: "id",
-									operator: "eq",
-									value: existingAccount.userId,
-								},
-							],
-						});
-					}
-
 					// link account
 					await ctx.context.internalAdapter.linkAccount({
 						userId: session.user.id,
@@ -360,6 +332,44 @@ export const telegram = (options: TelegramOptions) => {
 					return ctx.json({
 						redirect: !!ctx.body.callbackURL,
 						url: ctx.body.callbackURL,
+						status: true,
+					});
+				},
+			),
+			telegramUnlink: createAuthEndpoint(
+				"/telegram/unlink",
+				{
+					method: "POST",
+					use: [freshSessionMiddleware],
+				},
+				async (ctx) => {
+					const accounts = await ctx.context.internalAdapter.findAccounts(
+						ctx.context.session.user.id,
+					);
+					if (
+						accounts.length === 1 &&
+						!ctx.context.options.account?.accountLinking?.allowUnlinkingAll
+					) {
+						throw APIError.from(
+							"BAD_REQUEST",
+							BASE_ERROR_CODES.FAILED_TO_UNLINK_LAST_ACCOUNT,
+						);
+					}
+
+					const accountExist = accounts.find(
+						(account) => account.providerId === "telegram",
+					);
+
+					if (!accountExist) {
+						throw APIError.from(
+							"BAD_REQUEST",
+							BASE_ERROR_CODES.ACCOUNT_NOT_FOUND,
+						);
+					}
+
+					await ctx.context.internalAdapter.deleteAccount(accountExist.id);
+
+					return ctx.json({
 						status: true,
 					});
 				},
