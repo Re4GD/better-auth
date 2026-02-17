@@ -271,14 +271,6 @@ export const telegram = (options: TelegramOptions) => {
 						);
 					}
 
-					let profile: TelegramProfile = {
-						id: id,
-						first_name: first_name,
-						last_name: last_name,
-						username: username,
-						photo_url: photo_url,
-					};
-
 					// look for existing accounts
 					const existingAccounts =
 						await ctx.context.internalAdapter.findAccounts(session.user.id);
@@ -286,8 +278,7 @@ export const telegram = (options: TelegramOptions) => {
 					// if the account is already connected, early return
 					const hasBeenLinked = existingAccounts.find(
 						(a) =>
-							a.providerId === profile.id.toString() &&
-							a.userId === session.user.id,
+							a.providerId === id.toString() && a.userId === session.user.id,
 					);
 					if (hasBeenLinked) {
 						return ctx.json({
@@ -301,7 +292,7 @@ export const telegram = (options: TelegramOptions) => {
 					await ctx.context.internalAdapter.linkAccount({
 						userId: session.user.id,
 						providerId: "telegram",
-						accountId: profile.id.toString(),
+						accountId: id.toString(),
 					});
 
 					return ctx.json({
