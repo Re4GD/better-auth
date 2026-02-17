@@ -355,7 +355,7 @@ export const telegram = (options: TelegramOptions) => {
 						callbackURL: z
 							.string()
 							.meta({
-								description: "URL to redirect after magic link verification",
+								description: "URL to redirect after verification",
 							})
 							.optional(),
 						newUserCallbackURL: z
