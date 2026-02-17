@@ -17,9 +17,7 @@ import { parseUserOutput } from "../../db";
 export type { TelegramOptions };
 
 // TODO docs: react examples, redirect/callback flows
-// TODO test: test link with existing account
-// TODO feat: add callback-link endpoint
-// TODO callback api errors should redirect to url like magic link
+// TODO test: add tests
 
 export const telegram = (options: TelegramOptions) => {
 	return {
