@@ -17,7 +17,6 @@ import { parseUserOutput } from "../../db";
 export type { TelegramOptions };
 
 // TODO docs: react examples, redirect/callback flows
-// TODO test: add tests
 
 export const telegram = (options: TelegramOptions) => {
 	return {
