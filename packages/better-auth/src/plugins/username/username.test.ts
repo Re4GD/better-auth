@@ -1,9 +1,9 @@
-import { describe, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { getTestInstance } from "../../test-utils/test-instance";
-import { username } from ".";
+import { USERNAME_ERROR_CODES, username } from ".";
 import { usernameClient } from "./client";
 
-describe("username", async (it) => {
+describe("username", async () => {
 	const { client, sessionSetter, signInWithTestUser } = await getTestInstance(
 		{
 			plugins: [
@@ -54,7 +54,7 @@ describe("username", async (it) => {
 		expect(res.data?.token).toBeDefined();
 	});
 	it("should update username", async () => {
-		const res = await client.updateUser({
+		await client.updateUser({
 			username: "new_username_2.1",
 			fetchOptions: {
 				headers,
@@ -149,7 +149,7 @@ describe("username", async (it) => {
 			name: "new-name",
 		});
 		expect(res.error?.status).toBe(400);
-		expect(res.error?.code).toBe("USERNAME_IS_INVALID");
+		expect(res.error?.code).toBe(USERNAME_ERROR_CODES.INVALID_USERNAME.code);
 	});
 
 	it("should fail on too short username", async () => {
@@ -160,7 +160,7 @@ describe("username", async (it) => {
 			name: "new-name",
 		});
 		expect(res.error?.status).toBe(400);
-		expect(res.error?.code).toBe("USERNAME_IS_TOO_SHORT");
+		expect(res.error?.code).toBe("USERNAME_TOO_SHORT");
 	});
 
 	it("should fail on empty username", async () => {
@@ -199,7 +199,7 @@ describe("username", async (it) => {
 			username: "invalid username!",
 		});
 		expect(res.error?.status).toBe(422);
-		expect(res.error?.code).toBe("USERNAME_IS_INVALID");
+		expect(res.error?.code).toBe(USERNAME_ERROR_CODES.INVALID_USERNAME.code);
 	});
 
 	it("should reject too short username in isUsernameAvailable", async () => {
@@ -207,7 +207,7 @@ describe("username", async (it) => {
 			username: "abc",
 		});
 		expect(res.error?.status).toBe(422);
-		expect(res.error?.code).toBe("USERNAME_IS_TOO_SHORT");
+		expect(res.error?.code).toBe("USERNAME_TOO_SHORT");
 	});
 
 	it("should reject too long username in isUsernameAvailable", async () => {
@@ -216,7 +216,7 @@ describe("username", async (it) => {
 			username: longUsername,
 		});
 		expect(res.error?.status).toBe(422);
-		expect(res.error?.code).toBe("USERNAME_IS_TOO_LONG");
+		expect(res.error?.code).toBe(USERNAME_ERROR_CODES.USERNAME_TOO_LONG.code);
 	});
 
 	it("should not normalize displayUsername", async () => {
@@ -296,7 +296,7 @@ describe("username", async (it) => {
 	});
 });
 
-describe("username custom normalization", async (it) => {
+describe("username custom normalization", async () => {
 	const { client } = await getTestInstance(
 		{
 			plugins: [
@@ -362,7 +362,7 @@ describe("username custom normalization", async (it) => {
 	});
 });
 
-describe("username with displayUsername validation", async (it) => {
+describe("username with displayUsername validation", async () => {
 	const { client, sessionSetter } = await getTestInstance(
 		{
 			plugins: [
@@ -397,7 +397,9 @@ describe("username with displayUsername validation", async (it) => {
 			name: "test-name",
 		});
 		expect(res.error?.status).toBe(400);
-		expect(res.error?.code).toBe("DISPLAY_USERNAME_IS_INVALID");
+		expect(res.error?.code).toBe(
+			USERNAME_ERROR_CODES.INVALID_DISPLAY_USERNAME.code,
+		);
 	});
 
 	it("should update displayUsername with valid value", async () => {
@@ -463,11 +465,13 @@ describe("username with displayUsername validation", async (it) => {
 		});
 
 		expect(res.error?.status).toBe(400);
-		expect(res.error?.code).toBe("DISPLAY_USERNAME_IS_INVALID");
+		expect(res.error?.code).toBe(
+			USERNAME_ERROR_CODES.INVALID_DISPLAY_USERNAME.code,
+		);
 	});
 });
 
-describe("isUsernameAvailable with custom validator", async (it) => {
+describe("isUsernameAvailable with custom validator", async () => {
 	const { client } = await getTestInstance(
 		{
 			plugins: [
@@ -497,11 +501,35 @@ describe("isUsernameAvailable with custom validator", async (it) => {
 			username: "invalid_user",
 		});
 		expect(res.error?.status).toBe(422);
-		expect(res.error?.code).toBe("USERNAME_IS_INVALID");
+		expect(res.error?.code).toBe(USERNAME_ERROR_CODES.INVALID_USERNAME.code);
+	});
+
+	it("should reject username that doesn't match custom validator during sign-up/sign-in", async () => {
+		const signUpRes = await client.signUp.email({
+			email: "test-user@test.com",
+			password: "password1234",
+			name: "Test user",
+			username: "invalid_user",
+		});
+
+		expect(signUpRes.error).toBeDefined();
+		expect(signUpRes.error?.code).toBe(
+			USERNAME_ERROR_CODES.INVALID_USERNAME.code,
+		);
+
+		const signInRes = await client.signIn.username({
+			username: "invalid_user",
+			password: "password1234",
+		});
+
+		expect(signInRes.error).toBeDefined();
+		expect(signInRes.error?.code).toBe(
+			USERNAME_ERROR_CODES.INVALID_USERNAME.code,
+		);
 	});
 });
 
-describe("post normalization flow", async (it) => {
+describe("post normalization flow", async () => {
 	it("should set displayUsername to username if only username is provided", async () => {
 		const { auth } = await getTestInstance({
 			plugins: [
@@ -531,5 +559,46 @@ describe("post normalization flow", async (it) => {
 		});
 		expect(session?.user.username).toBe("test_username");
 		expect(session?.user.displayUsername).toBe("Test Username");
+	});
+});
+
+describe("username email verification flow (no info leak)", async () => {
+	const { client } = await getTestInstance(
+		{
+			emailAndPassword: { enabled: true, requireEmailVerification: true },
+			plugins: [username()],
+		},
+		{
+			clientOptions: {
+				plugins: [usernameClient()],
+			},
+		},
+	);
+
+	it("returns INVALID_USERNAME_OR_PASSWORD for wrong password even if email is unverified", async () => {
+		await client.signUp.email({
+			email: "unverified-user@example.com",
+			username: "unverified_user",
+			password: "correct-password",
+			name: "Unverified User",
+		});
+
+		const res = await client.signIn.username({
+			username: "unverified_user",
+			password: "wrong-password",
+		});
+
+		expect(res.error?.status).toBe(401);
+		expect(res.error?.code).toBe("INVALID_USERNAME_OR_PASSWORD");
+	});
+
+	it("returns EMAIL_NOT_VERIFIED only after a correct password for an unverified user", async () => {
+		const res = await client.signIn.username({
+			username: "unverified_user",
+			password: "correct-password",
+		});
+
+		expect(res.error?.status).toBe(403);
+		expect(res.error?.code).toBe("EMAIL_NOT_VERIFIED");
 	});
 });

@@ -1,14 +1,24 @@
-import type { BetterAuthPlugin } from "better-auth/types";
-import { createAuthMiddleware } from "better-auth/api";
+import type { BetterAuthPlugin } from "@better-auth/core";
+import { createAuthMiddleware } from "@better-auth/core/api";
+import { expoAuthorizationProxy } from "./routes";
 
 export interface ExpoOptions {
 	/**
-	 * Override origin header for expo API routes
+	 * Disable origin override for expo API routes
+	 * When set to true, the origin header will not be overridden for expo API routes
 	 */
-	overrideOrigin?: boolean;
+	disableOriginOverride?: boolean | undefined;
 }
 
-export const expo = (options?: ExpoOptions) => {
+declare module "@better-auth/core" {
+	interface BetterAuthPluginRegistry<AuthOptions, Options> {
+		expo: {
+			creator: typeof expo;
+		};
+	}
+}
+
+export const expo = (options?: ExpoOptions | undefined) => {
 	return {
 		id: "expo",
 		init: (ctx) => {
@@ -22,18 +32,23 @@ export const expo = (options?: ExpoOptions) => {
 			};
 		},
 		async onRequest(request, ctx) {
-			if (!options?.overrideOrigin || request.headers.get("origin")) {
+			if (options?.disableOriginOverride || request.headers.get("origin")) {
 				return;
 			}
 			/**
-			 * To bypass origin check from expo, we need to set the origin header to the expo-origin header
+			 * To bypass origin check from expo, we need to set the origin
+			 * header to the expo-origin header
 			 */
 			const expoOrigin = request.headers.get("expo-origin");
 			if (!expoOrigin) {
 				return;
 			}
-			const req = request.clone();
-			req.headers.set("origin", expoOrigin);
+
+			// Construct new Headers with new Request to avoid mutating the original request
+			const newHeaders = new Headers(request.headers);
+			newHeaders.set("origin", expoOrigin);
+			const req = new Request(request, { headers: newHeaders });
+
 			return {
 				request: req,
 			};
@@ -42,9 +57,11 @@ export const expo = (options?: ExpoOptions) => {
 			after: [
 				{
 					matcher(context) {
-						return (
+						return !!(
 							context.path?.startsWith("/callback") ||
-							context.path?.startsWith("/oauth2/callback")
+							context.path?.startsWith("/oauth2/callback") ||
+							context.path?.startsWith("/magic-link/verify") ||
+							context.path?.startsWith("/verify-email")
 						);
 					},
 					handler: createAuthMiddleware(async (ctx) => {
@@ -77,5 +94,9 @@ export const expo = (options?: ExpoOptions) => {
 				},
 			],
 		},
+		endpoints: {
+			expoAuthorizationProxy,
+		},
+		options,
 	} satisfies BetterAuthPlugin;
 };
