@@ -12,7 +12,7 @@ export const buildTelegramHash = (dataFields: object) => {
 	return dataCheckString;
 };
 
-export const verifyMaxAge = ({ authDate }: { authDate: number }) => {
+export const verifyMaxAge = ({ authDate }: { authDate: number | string }) => {
 	const authDateNumber = parseInt(authDate.toString());
 	const currentTime = Math.floor(Date.now() / 1000);
 	const maxAge = 60 * 5; // 5 minutes in seconds
